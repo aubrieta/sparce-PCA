@@ -1,0 +1,123 @@
+# This file is staged with the shared Python network into Programs/Source.
+import json
+import os
+import sys
+from Compiler.types import sint, sfix, cfix
+from Compiler.library import print_ln, start_timer, stop_timer, for_range
+from Compiler.mpc_math import sqrt
+
+cfg = json.load(open(os.environ['SPARSE_PCA_PUBLIC_CONFIG']))
+sys.path.insert(0, os.path.dirname(os.environ['SPARSE_PCA_PUBLIC_CONFIG']))
+from oblivious_network import matvec
+
+sfix.set_precision(cfg['fractional_bits'], cfg['fixedpoint_bits'])
+cfix.set_precision(cfg['fractional_bits'], cfg['fixedpoint_bits'])
+G=cfg['genes']
+C=cfg['cells']
+
+def choose(bit, yes, no):
+    if isinstance(bit, (bool, int)):
+        return yes if bit else no
+    return bit.if_else(yes, no)
+
+def dot(a,b):
+    return sfix.dot_product(a,b)
+
+# Timer IDs: 1 input, 2 mean, 3 forward, 4 transpose,
+# 5 correction, 6 normalization, 7 output. Sparse network routing is
+# included in timers 3 and 4; this implementation rebuilds it each call.
+start_timer(1)
+sums=[]
+matrices=[]
+for party,rows in enumerate(cfg['rows']):
+    sums.append([sfix.get_input_from(party) for _ in range(G)])
+    if cfg['variant']=='dense':
+        matrices.append([[sfix.get_input_from(party) for _ in range(G)] for _ in range(rows)])
+    else:
+        entries=[]
+        for _ in range(cfg['capacity']):
+            r=sint.get_input_from(party)
+            c=sint.get_input_from(party)
+            value=sfix.get_input_from(party)
+            if cfg['variant']=='sparse_public':
+                r=r.reveal()
+                c=c.reveal()
+            entries.append((r,c,value))
+        matrices.append(entries)
+stop_timer(1)
+
+start_timer(2)
+mu=[sum((s[j] for s in sums),sfix(0))/C for j in range(G)]
+stop_timer(2)
+
+def public_matvec(entries,vector,size):
+    # Public runtime coordinates require public-indexed arrays.
+    # Coordinates can alias, especially zero padding. Preserve read/modify/write
+    # order: the compiler cannot infer aliases between different public registers.
+    program.open_memory_scope()
+    from Compiler.types import Array
+    source=Array(len(vector),sfix)
+    target=Array(size,sfix)
+    for j,value in enumerate(vector): source[j]=value
+    target.assign_all(0)
+    for dest,src,value in entries:
+        target[dest]=target[dest]+value*source[src]
+    result=[target[j] for j in range(size)]
+    program.close_memory_scope()
+    return result
+
+def apply(v):
+    start_timer(3)
+    us=[]
+    for rows,matrix in zip(cfg['rows'],matrices):
+        if cfg['variant']=='dense':
+            us.append([dot(row,v) for row in matrix])
+        elif cfg['variant']=='sparse_public':
+            us.append(public_matvec(matrix,v,rows))
+        else:
+            us.append(matvec(matrix,v,rows,choose))
+    stop_timer(3)
+    start_timer(4)
+    contributions=[]
+    for rows,matrix,u in zip(cfg['rows'],matrices,us):
+        if cfg['variant']=='dense':
+            contributions.append([dot([matrix[r][j] for r in range(rows)],u) for j in range(G)])
+        else:
+            transposed=[(col,row,value) for row,col,value in matrix]
+            fn=public_matvec if cfg['variant']=='sparse_public' else matvec
+            contributions.append(fn(transposed,u,G) if fn==public_matvec else fn(transposed,u,G,choose))
+    w=[sum((part[j] for part in contributions),sfix(0)) for j in range(G)]
+    stop_timer(4)
+    start_timer(5)
+    correction=dot(mu,v)
+    result=[w[j]-C*mu[j]*correction for j in range(G)]
+    stop_timer(5)
+    return result
+
+v=[sfix(x) for x in cfg['initial_vector']]
+if cfg['task']=='operator':
+    result=apply(v)
+    if not cfg['validation']:
+        raise ValueError('operator outputs may only be revealed in validation mode')
+    print_ln('VALIDATION_OPERATOR ' + ' '.join(['%s']*G), *[(x/(cfg['input_scale']**2)).reveal() for x in result])
+else:
+    state=sfix.Array(G)
+    for j in range(G): state[j]=v[j]
+    @for_range(cfg['iterations'])
+    def iteration_loop(iteration):
+        old_v=[state[j] for j in range(G)]
+        w=apply(old_v)
+        start_timer(6)
+        norm_squared=dot(w,w)
+        usable=norm_squared > cfg['zero_threshold']**2
+        safe_squared=choose(usable,norm_squared,sfix(1))
+        norm=sqrt(safe_squared)
+        for j in range(G): state[j]=choose(usable,w[j]/norm,old_v[j])
+        stop_timer(6)
+    v=[state[j] for j in range(G)]
+    av=apply(v)
+    eigenvalue=dot(v,av)/((C-1)*dot(v,v)) / (cfg['input_scale']**2)
+    start_timer(7)
+    print_ln('PC1 ' + ' '.join(['%s']*G), *[x.reveal() for x in v])
+    print_ln('EIGENVALUE %s',eigenvalue.reveal())
+    stop_timer(7)

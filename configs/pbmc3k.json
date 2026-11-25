@@ -1,0 +1,8 @@
+{
+  "source": "pbmc3k", "genes": 128, "seed": 17,
+  "fractions": [0.3333333333333333,0.3333333333333333,0.3333333333333333],
+  "capacity_per_hospital": 115200, "iterations": 20, "input_scale": 0.015625,
+  "fractional_bits": 20, "fixedpoint_bits": 60, "ring_bits": 256,
+  "zero_threshold": 0.001, "warmups": 1, "repetitions": 5,
+  "timeout_seconds": 3600
+}

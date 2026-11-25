@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparse-pca-mpc"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["numpy==2.2.6"]
+
+[project.optional-dependencies]
+biology = ["scanpy==1.11.5", "scipy==1.15.3"]
+plots = ["matplotlib==3.10.3"]
+
+[project.scripts]
+sparse-pca = "sparse_pca.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
