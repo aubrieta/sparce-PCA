@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, wait as wait_futures
 import numpy as np
 from .data import load
 from .export import export
@@ -140,7 +141,27 @@ def compile_program(data_dir, destination, mpspdz, variant, task, validation=Fal
     return metadata
 
 
-def run_job(directory, mpspdz=None, port=19000):
+def wait_exact(processes,timeout):
+    """Block in waitpid on separate threads; avoid Popen timeout polling.
+
+    Timeouts on Popen.wait() use exponential sleep intervals on POSIX, adding
+    up to 50 ms to observed completion. Futures wait on a condition variable.
+    Return actual exit-observation timestamps, including every party.
+    """
+    def reap(process):
+        code=process.wait()
+        return code,time.perf_counter()
+    with ThreadPoolExecutor(max_workers=len(processes)) as executor:
+        futures=[executor.submit(reap,p) for p in processes]
+        _,pending=wait_futures(futures,timeout=timeout)
+        if pending:
+            for p in processes:
+                if p.poll() is None: p.kill()
+            raise subprocess.TimeoutExpired('MPC party processes',timeout)
+        return [f.result() for f in futures]
+
+
+def run_job(directory, mpspdz=None, port=19000, precise_wall=False):
     """Runs only when explicitly invoked, never as part of compile or validate."""
     directory=Path(directory).resolve()
     job=json.loads((directory/"job.json").read_text())
@@ -171,6 +192,12 @@ def run_job(directory, mpspdz=None, port=19000):
     result={"status":"failed","port":port,"party_exit_codes":[],"peak_memory_note":
             "OS time utility measures each party process; aggregate memory is not measured",
             "environment":environment(mpspdz)}
+    exits=None
+    if precise_wall:
+        # Environment inspection is controller bookkeeping, not process startup.
+        result['wall_clock_method']='concurrent blocking waitpid; maximum party completion timestamp'
+        result['runner_sha256']=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        started=time.perf_counter()
     try:
         for party in range(3):
             handle=(directory/f"party-{party}.log").open("w"); handles.append(handle)
@@ -180,8 +207,11 @@ def run_job(directory, mpspdz=None, port=19000):
                 cmd=["/usr/bin/time","-l" if sys.platform=="darwin" else "-v"]+cmd
             processes.append(subprocess.Popen(cmd,cwd=runtime,stdout=handle,stderr=subprocess.STDOUT))
         deadline=started+job["timeout_seconds"]
-        for p in processes:
-            p.wait(timeout=max(0.01,deadline-time.perf_counter()))
+        if precise_wall:
+            exits=wait_exact(processes,max(0.01,deadline-time.perf_counter()))
+        else:
+            for p in processes:
+                p.wait(timeout=max(0.01,deadline-time.perf_counter()))
         result["party_exit_codes"]=[p.returncode for p in processes]
         result["status"]="executed" if all(p.returncode==0 for p in processes) else "failed"
     except subprocess.TimeoutExpired:
@@ -193,7 +223,7 @@ def run_job(directory, mpspdz=None, port=19000):
             if p.poll() is None: p.kill()
         for p in processes: p.wait()
         for h in handles: h.close()
-        result["wall_seconds"]=time.perf_counter()-started
+        result["wall_seconds"]=(max(t for code,t in exits)-started if exits else time.perf_counter()-started)
         result["party_exit_codes"]=[p.returncode for p in processes]
         write_json(directory/"execution.json",result)
     return result

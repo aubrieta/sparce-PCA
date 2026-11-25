@@ -55,10 +55,13 @@ def bundle(directory):
     names={'job.json','compile.log','party-0.log','party-1.log','party-2.log',
            'execution.json','verification.json','summary.json','summary.csv',
            'local-validation.json','benchmark-summary.json','measurements.json','ssl.log',
-           'experiment.json','sparsity-summary.json','sparsity-summary.csv'}
+           'experiment.json','sparsity-summary.json','sparsity-summary.csv',
+           'api-audit.json','compiler-evidence.json','fixture.json','local-checks.json',
+           'comparisons.json','comparisons.csv','compiler-proof.json','correctness-summary.json'}
     with tarfile.open(target,'w:gz') as archive:
         for p in sorted(directory.rglob('*')):
-            if p.is_file() and p.name in names and 'runtime' not in p.relative_to(directory).parts:
+            policy_log=p.name.startswith(('verification-','correctness-summary-')) and p.suffix=='.json'
+            if p.is_file() and (p.name in names or policy_log) and 'runtime' not in p.relative_to(directory).parts:
                 archive.add(p,arcname=str(p.relative_to(directory)))
     return target
 

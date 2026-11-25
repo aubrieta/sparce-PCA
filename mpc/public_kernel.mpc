@@ -1,0 +1,111 @@
+"""Matched public-support kernels; schedules and padding are public for ALL variants."""
+import os, json
+from Compiler.types import sfix, cfix
+from Compiler.library import start_timer, stop_timer, print_ln, for_range
+from Compiler.mpc_math import sqrt
+cfg=json.load(open(os.environ['SPARSE_PCA_PUBLIC_CONFIG']))
+sfix.set_precision(cfg['fractional_bits'],cfg['fixedpoint_bits'])
+cfix.set_precision(cfg['fractional_bits'],cfg['fixedpoint_bits'])
+# Buffers are written using public dynamic loop indices and later read using
+# constant indices. Protect that aliasing in every variant, not just scalar.
+program.protect_memory(True)
+G=cfg['genes']; C=cfg['cells']; N=cfg['vector_count']
+def dot(a,b):
+    return sfix.dot_product(a,b) if a else sfix(0)
+
+start_timer(1)
+means=[]; matrices=[]
+for party,schedule in enumerate(cfg['schedules']):
+    means.append([sfix.get_input_from(party) for _ in range(G)])
+    length=schedule['rows']*G if cfg['variant']=='dense' else cfg['capacity']
+    matrices.append([sfix.get_input_from(party) for _ in range(length)])
+vectors=sfix.Matrix(N,G)
+for i in range(N):
+    for j in range(G): vectors[i][j]=sfix.get_input_from(0)
+stop_timer(1)
+start_timer(2)
+mu=[sum((m[j] for m in means),sfix(0))/C for j in range(G)]
+stop_timer(2)
+
+def multiply(party,vector,transpose=False):
+    schedule=cfg['schedules'][party]; values=matrices[party]
+    size=G if transpose else schedule['rows']
+    if cfg['variant']=='dense':
+        if transpose:
+            return [dot([values[r*G+j] for r in range(schedule['rows'])],vector) for j in range(G)]
+        return [dot(values[r*G:(r+1)*G],vector) for r in range(schedule['rows'])]
+    if cfg['variant']=='sparse_scalar':
+        # Preserve the legacy scalar read/modify/write dependency and memory
+        # protection, while making support loading identical to grouped kernels.
+        program.open_memory_scope()
+        target=sfix.Array(size); target.assign_all(0)
+        for idx,(row,col) in enumerate(schedule['coordinates']):
+            dest,src=(col,row) if transpose else (row,col)
+            target[dest]=target[dest]+values[idx]*vector[src]
+        result=[target[j] for j in range(size)]
+        program.close_memory_scope()
+        return result
+    groups=schedule['columns' if transpose else 'row_groups']
+    if cfg['variant']=='sparse_grouped':
+        # Materialize ALL independently truncated products before accumulation.
+        # The compiler can merge their arithmetic without destination dependencies.
+        products=[values[i]*vector[row if transpose else col]
+                  for i,(row,col) in enumerate(schedule['coordinates'])]
+        return [sum((products[i] for i in group),sfix(0)) for group in groups]
+    if cfg['variant']=='sparse_dot':
+        return [dot([values[i] for i in group],
+                    [vector[schedule['coordinates'][i][0 if transpose else 1]] for i in group])
+                for group in groups]
+    raise ValueError('unknown public kernel')
+
+def apply(v):
+    start_timer(3)
+    us=[multiply(i,v) for i in range(3)]
+    stop_timer(3)
+    start_timer(4)
+    ws=[multiply(i,us[i],True) for i in range(3)]
+    w=[sum((a[j] for a in ws),sfix(0)) for j in range(G)]
+    stop_timer(4)
+    start_timer(5)
+    alpha=dot(mu,v)
+    result=[w[j]-C*mu[j]*alpha for j in range(G)]
+    stop_timer(5)
+    return result
+
+results=sfix.Matrix(N,G)
+if cfg['workload']=='pc1':
+    state=sfix.Array(G)
+    for j in range(G): state[j]=vectors[0][j]
+    start_timer(8)
+    @for_range(cfg['iterations'])
+    def iteration(t):
+        old=[state[j] for j in range(G)]; w=apply(old)
+        start_timer(6)
+        norm2=dot(w,w); usable=norm2>cfg['zero_threshold']**2
+        norm=sqrt(usable.if_else(norm2,sfix(1)))
+        for j in range(G): state[j]=usable.if_else(w[j]/norm,old[j])
+        stop_timer(6)
+    v=[state[j] for j in range(G)]; av=apply(v)
+    eigenvalue=dot(v,av)/((C-1)*dot(v,v))/(cfg['input_scale']**2)
+    stop_timer(8)
+    start_timer(7)
+    print_ln('PC1 '+' '.join(['%s']*G),*[a.reveal() for a in v])
+    print_ln('EIGENVALUE %s',eigenvalue.reveal())
+    stop_timer(7)
+else:
+    start_timer(8)
+    @for_range(N)
+    def application(t):
+        result=apply([vectors[t][j] for j in range(G)])
+        for j in range(G): results[t][j]=result[j]
+    stop_timer(8)
+    # Consume EVERY result after the timed region; no chaining of applications.
+    start_timer(7)
+    checksum=[sum(((i+1)*results[i][j] for i in range(N)),sfix(0))
+              /(cfg['input_scale']**2) for j in range(G)]
+    if cfg['workload'] in ('validation','single'):
+        for i in range(N):
+            print_ln('RESULT %s '+' '.join(['%s']*G),i,
+                     *[(results[i][j]/(cfg['input_scale']**2)).reveal() for j in range(G)])
+    print_ln('CHECKSUM '+' '.join(['%s']*G),*[a.reveal() for a in checksum])
+    stop_timer(7)

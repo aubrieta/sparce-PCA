@@ -1,5 +1,12 @@
 # Sparse, implicitly centered PCA with MP-SPDZ
 
+The separate matched optimization experiment is documented in
+[PUBLIC_KERNEL_EXPERIMENT.md](PUBLIC_KERNEL_EXPERIMENT.md). It preserves this
+original implementation and its results, and adds scalar/grouped/dot public-support
+comparisons with strict correctness gates and paired confidence intervals.
+Seed-17 kernel findings and the process-clock correction are recorded in
+[PUBLIC_KERNEL_RESULTS.md](PUBLIC_KERNEL_RESULTS.md).
+
 This repository compares dense and sparse secure PC1 on identical horizontally
 partitioned matrices. The centered operator is
 

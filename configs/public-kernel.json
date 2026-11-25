@@ -1,0 +1,10 @@
+{
+  "seeds": [17], "confirmation_seeds": [7,29],
+  "densities": [0.01,0.03,0.10,0.25,0.50,1.0],
+  "cells": 24, "genes": 12, "value_bound": 4.0,
+  "input_scale": 0.25, "fractional_bits": 20, "fixedpoint_bits": 48,
+  "ring_bits": 128, "warmups": 2, "repetitions": 10,
+  "batch_vectors": 32, "iterations": 20, "bootstrap_samples": 10000,
+  "absolute_tolerance": 0.001, "relative_tolerance": 0.0001,
+  "zero_threshold": 0.001, "timeout_seconds": 600
+}

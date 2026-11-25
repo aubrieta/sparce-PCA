@@ -1,0 +1,7 @@
+{
+  "id": "rounding-v2",
+  "absolute_tolerance": 0.002,
+  "relative_tolerance": 0.0001,
+  "original_absolute_tolerance": 0.001,
+  "reason": "Uniform absolute-floor revision after cancellation investigation. Before MPC execution, deterministic per-product rounding reached 0.001804 on a zero-output fixture. Actual MPC reached 0.001000471 for one dot vector; all six density fixtures passed the original policy. Keep f=20,k=48,ring=128 and the relative tolerance unchanged. Preserve original verification files and report both policies."
+}
