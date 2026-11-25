@@ -9,6 +9,7 @@ from .data import prepare
 from .runner import VARIANTS, compile_program, compile_suite, run_job, verify_job, write_json
 from .validation import validate_data
 from .plotting import report, benchmark_summary, plot_sweep
+from .experiments import compile_sweep,run_sweep,summarize_sweep
 
 
 def run_suite(directory,mpspdz,port):
@@ -53,7 +54,8 @@ def bundle(directory):
     # Explicit allowlist: never include inputs, certificates, private keys, or runtime data.
     names={'job.json','compile.log','party-0.log','party-1.log','party-2.log',
            'execution.json','verification.json','summary.json','summary.csv',
-           'local-validation.json','benchmark-summary.json','measurements.json','ssl.log'}
+           'local-validation.json','benchmark-summary.json','measurements.json','ssl.log',
+           'experiment.json','sparsity-summary.json','sparsity-summary.csv'}
     with tarfile.open(target,'w:gz') as archive:
         for p in sorted(directory.rglob('*')):
             if p.is_file() and p.name in names and 'runtime' not in p.relative_to(directory).parts:
@@ -78,13 +80,28 @@ def main(argv=None):
         p=sub.add_parser(name); p.add_argument('--out',default='results/smoke')
         if name=='run-suite':
             p.add_argument('--mpspdz',default='/tmp/MP-SPDZ'); p.add_argument('--port',type=int,default=19000)
+    p=sub.add_parser('compile-sweep')
+    p.add_argument('--config',default='configs/sparsity-pilot.json')
+    p.add_argument('--out',default='results/sparsity-pilot')
+    p.add_argument('--mpspdz',default='/tmp/MP-SPDZ')
+    p.add_argument('--task',choices=['operator','pc1'],default='operator')
+    p.add_argument('--variants',nargs='+',choices=VARIANTS,default=list(VARIANTS))
+    p=sub.add_parser('run-sweep')
+    p.add_argument('--out',default='results/sparsity-pilot')
+    p.add_argument('--mpspdz',default='/tmp/MP-SPDZ')
+    p.add_argument('--port',type=int,default=19000)
+    p=sub.add_parser('summarize-sweep'); p.add_argument('--out',default='results/sparsity-pilot')
     args=parser.parse_args(argv)
     try:
         if args.command in ('prepare','validate','compile-suite','benchmark','sweep'):
             config=json.loads(Path(args.config).read_text())
             if args.command in ('prepare','validate','compile-suite'):
                 prepare(config,Path(args.out)/'data')
-        if args.command=='prepare': result={'status':'prepared','data':str(Path(args.out)/'data')}
+        if args.command=='compile-sweep':
+            result=compile_sweep(json.loads(Path(args.config).read_text()),args.out,args.mpspdz,args.variants,args.task)
+        elif args.command=='run-sweep': return 0 if run_sweep(args.out,args.mpspdz,args.port) else 1
+        elif args.command=='summarize-sweep': result=summarize_sweep(args.out)
+        elif args.command=='prepare': result={'status':'prepared','data':str(Path(args.out)/'data')}
         elif args.command=='validate':
             result=validate_data(Path(args.out)/'data')
             write_json(Path(args.out)/'local-validation.json',result)

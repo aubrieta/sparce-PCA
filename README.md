@@ -10,7 +10,7 @@ The sample covariance eigenvalue is obtained by dividing the Rayleigh quotient b
 
 ## Current verification status
 
-Fifteen local tests pass (the separate compiler integration test is opt-in).
+Seventeen local tests pass (the separate compiler integration test is opt-in).
 All six smoke programs compiled and have passed actual three-party MPC
 execution and numerical verification in the user's Terminal. Dense and
 private-support results are in `results/smoke`; corrected public-support results
@@ -191,6 +191,48 @@ Residuals are recorded. A small eigengap can prevent a fixed iteration budget
 from meeting the SVD target; that is reported as a failed accuracy target.
 
 ## Benchmarking and data
+
+### Controlled sparsity pilot
+
+`configs/sparsity-pilot.json` fixes 24 cells, 12 genes, three equally sized
+hospital partitions, uniform support, seed 17, and the numerical settings.
+It requests densities 1%, 3%, 10%, 25%, 50%, and 100% (sparsities 99%, 97%,
+90%, 75%, 50%, and 0%). Integer nonzero counts slightly change realized levels;
+all reports use realized density. No nonzero value threshold is applied.
+
+The pilot measures the centered operator, including global mean preparation,
+independently of power-iteration normalization. All input vectors are secret.
+Each case uses identical input matrices and vectors across implementations.
+It runs one warm-up plus five measured trials per variant: 108 runs total.
+Variants are interleaved in seeded randomized order within each repetition
+round to reduce machine-temperature and execution-order bias.
+Runtime startup is included in wall time and excluded from forward/transpose
+kernel timers. Both measures are summarized separately, alongside communication
+and accuracy failures. Synthetic capacity per hospital is the declared total
+nonzero bound, capped by the public maximum hospital matrix size. At higher
+densities padding can occupy the entire matrix; sorting rounds up record counts
+to powers of two, so performance can change in steps.
+
+Compile without starting parties:
+
+```bash
+PYTHONPATH=src python3 -m sparse_pca.cli compile-sweep --config configs/sparsity-pilot.json --out results/sparsity-pilot --mpspdz /tmp/MP-SPDZ
+```
+
+Run the prepared jobs in your Terminal:
+
+```bash
+SPCA_PYTHON=/Users/erdos/miniconda3/bin/python3 bash scripts/run_sparsity_pilot.sh
+```
+
+The wrapper creates `results/sparsity-pilot/sparsity-summary.csv` and
+`return-logs.tar.gz`. A stopped sweep can be resumed with the same command;
+completed executions, including failed ones, are retained. To retry failed jobs,
+preserve their evidence and prepare a new experiment directory. `run-sweep`
+uses no network shaping and serializes cases to avoid port conflicts.
+This pilot uses one matrix seed. Any apparent crossover requires confirmation
+with additional seeds, larger shapes, and complete PC1 runs. A crossover is
+specific to protocol, network, precision, capacity, and representation leakage.
 
 Run a measured local-network benchmark with one warm-up and five repetitions:
 
