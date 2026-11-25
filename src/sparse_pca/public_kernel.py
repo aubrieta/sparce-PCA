@@ -629,13 +629,80 @@ def summarize(directory):
     return {'summary_rows':len(rows),'comparisons':len(comparisons),'measurements':'awaiting_execution' if not rows else 'collected; inspect correctness gates and pair counts'}
 
 
+def combine(sources,destination):
+    """Keep seed-specific paired CIs; do not pool unpaired seeds or clocks."""
+    destination=Path(destination); destination.mkdir(parents=True,exist_ok=True)
+    combined=[]; comparisons=[]; seen=set(); runs=[]; gates=[]; pc1=[]
+    policy_audit={k:{'checks':0,'original_policy_failures':0} for k in
+                  ['primary_validation_vectors','edge_validation_vectors','single_trial_vectors','trial_checksums']}
+    def count_vectors(result,category):
+        for label in ['original','quantized']:
+            for e in result.get('errors',{}).get(label,[]):
+                policy_audit[category]['checks']+=1
+                policy_audit[category]['original_policy_failures']+=not e['initial_passed']
+    controls=None
+    for source in map(Path,sources):
+        plan=json.loads((source/'experiment.json').read_text())
+        config=plan['config']
+        matched={k:config[k] for k in ['cells','genes','densities','input_scale','fractional_bits',
+                                      'fixedpoint_bits','ring_bits','warmups','repetitions','batch_vectors']}
+        if controls is not None and controls!=matched: raise ValueError('experiment controls differ')
+        controls=matched
+        for row in json.loads((source/'summary.json').read_text()):
+            key=(row['seed'],row['density'],row['workload'],row['variant'])
+            if key in seen: raise ValueError('duplicate seed/fixture population; exclude the old clock run')
+            seen.add(key)
+            if 'blocking waitpid' not in row['wall_clock_method']: raise ValueError('unreliable process clock')
+            if row['n_passed']!=config['repetitions'] or row['n_failed']: raise ValueError('incomplete/failed measurement population')
+            if row['accuracy_policy']!='rounding-v2': raise ValueError('accuracy policies differ')
+            combined.append({**row,'source_experiment':str(source)})
+        comparisons.extend({**c,'source_experiment':str(source)} for c in json.loads((source/'comparisons.json').read_text()))
+        for fixture in plan['fixtures']:
+            root=source/fixture['directory']
+            if (root/'measurements.json').exists():
+                measurements=json.loads((root/'measurements.json').read_text()); runs.extend(measurements)
+                for m in measurements:
+                    trial=root/f"{m['workload']}-{m['variant']}-trial-{m['repetition']}"
+                    result=json.loads((trial/'verification-rounding-v2.json').read_text())
+                    if m['workload']=='single': count_vectors(result,'single_trial_vectors')
+                    n=32 if m['workload']=='batch' else 1
+                    difference=(result['accuracy_policy']['absolute_tolerance']-.001)*n*(n+1)/2
+                    for label in ['original','quantized']:
+                        e=result['errors'][label+'_checksum']
+                        policy_audit['trial_checksums']['checks']+=1
+                        policy_audit['trial_checksums']['original_policy_failures']+=e['absolute_error']>e['allowed_error']-difference
+            for variant in VARIANTS:
+                p=root/('check-'+variant)/'verification-rounding-v2.json'
+                result=json.loads(p.read_text())
+                count_vectors(result,'primary_validation_vectors' if fixture['main'] else 'edge_validation_vectors')
+            for p in root.glob('pc1-check-*/verification-rounding-v2.json'):
+                d=json.loads(p.read_text()); pc1.append({'fixture':fixture['directory'],'variant':p.parent.name,
+                                                       'status':d['status'],'metrics':d.get('errors',{}).get('pc1')})
+        gates.extend(json.loads((source/'correctness-summary-rounding-v2.json').read_text()))
+    audit={'sources':list(map(str,sources)),'controls':controls,'seeds':sorted({r['seed'] for r in combined}),
+           'trial_executions':len(runs),'measured_trials':sum(not r['warmup'] for r in runs),
+           'passed_trial_executions':sum(r['status']=='passed' for r in runs),
+           'validation_jobs':len(gates),'passed_validation_jobs':sum(r['status']=='passed' for r in gates),
+           'pc1_confirmations':pc1,'accuracy_policy':'rounding-v2',
+           'original_policy_audit':policy_audit,
+           'statistics':'seed-specific paired bootstrap CIs retained; no cross-seed pooling'}
+    for name,data in [('summary',combined),('comparisons',comparisons)]:
+        write_json(destination/(name+'.json'),data)
+        with (destination/(name+'.csv')).open('w',newline='') as f:
+            w=csv.DictWriter(f,fieldnames=sorted(set().union(*(r.keys() for r in data))))
+            w.writeheader();w.writerows(data)
+    write_json(destination/'audit.json',audit)
+    return audit
+
+
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument('action',choices=['compile','run','summarize','bundle','fork'])
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument('action',choices=['compile','run','summarize','bundle','fork','combine'])
     p.add_argument('--config',default='configs/public-kernel.json'); p.add_argument('--out',default='results/public-kernel-optimized')
     p.add_argument('--mpspdz',default='/tmp/MP-SPDZ'); p.add_argument('--seeds',nargs='+',type=int)
     p.add_argument('--port',type=int,default=19000)
     p.add_argument('--accuracy-policy',help='explicit alternate validation policy; preserves original verification files')
     p.add_argument('--from-out',default='results/public-kernel-optimized')
+    p.add_argument('--sources',nargs='+',default=['results/public-kernel-clock-v2','results/public-kernel-confirmation'])
     args=p.parse_args(argv)
     try:
         if args.action=='compile': result=prepare_experiment(json.loads(Path(args.config).read_text()),args.out,args.mpspdz,args.seeds)
@@ -644,6 +711,7 @@ def main(argv=None):
             result=run_experiment(args.out,args.mpspdz,args.port,policy)
         elif args.action=='summarize': result=summarize(args.out)
         elif args.action=='fork': result=fork_measurements(args.from_out,args.out)
+        elif args.action=='combine': result=combine(args.sources,args.out)
         else:
             from .cli import bundle
             result=str(bundle(args.out))

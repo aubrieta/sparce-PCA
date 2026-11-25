@@ -1,4 +1,89 @@
-# Seed-17 optimized public-support results
+# Optimized public-support kernel experiment: final three-seed results
+
+## Final conclusions across seeds 17, 7, and 29
+
+The requested experiment is complete at 24 cells x 12 genes. The combined
+machine-readable dataset is `results/public-kernel-final/{summary,comparisons}.csv`
+and `.json`, with provenance and counts in `audit.json`. It includes only the
+corrected-clock seed-17 run and the seed-7/29 confirmations. The initial polling
+clock run is excluded from combined inference. Confidence intervals remain paired
+within fixture and seed; results are not pooled into an artificial larger sample.
+
+All **1,944 trial executions** passed (1,620 measured and 324 warm-ups).
+All 112 validation jobs and all 12 separate PC1 confirmations passed under
+rounding-v2. PC1 minimum alignment was 0.99934139 and maximum eigenvalue relative
+error was 0.00019319 (0.0193%), within the stated targets. Seed 29 converged more
+slowly: its residual was approximately 0.0051 after 20 iterations. Meeting the
+alignment/eigenvalue target does not imply identical convergence across seeds.
+
+For the 32-independent-application workload, **dense / sparse-dot matrix-kernel
+speedups** (higher is better):
+
+| Zero entries | Seed 17 | Seed 7 | Seed 29 | Predeclared kernel benefit in all seeds? |
+|---:|---:|---:|---:|---|
+| 98.96% | 2.557x | 1.974x | 1.896x | Yes |
+| 96.88% | 1.649x | 2.097x | 1.744x | Yes |
+| 89.93% | 1.459x | 1.387x | 1.453x | Yes |
+| 75.00% | 1.216x | 1.225x | 1.175x | Yes |
+| 50.00% | 0.999x | 1.009x | 0.992x | No |
+| 0.00% | 0.960x | 1.005x | 1.005x | No |
+
+At the four highest sparsities, every seed has a median runtime reduction of at
+least 10% with the paired 95% CI supporting a speedup. At 50% and 0% zeros no seed
+meets that criterion. The observed benefit boundary lies between 50% and 75%
+zeros on this coarse grid; it is not a precise or general crossover threshold.
+Confidence intervals for every fixture, including negative/null results, are
+retained in the combined comparisons file. The widest 75%-zero confirmation
+interval is seed 29: 1.175 [1.012, 1.216].
+
+The three predeclared outcomes are distinct:
+
+1. **Implementation improvement:** delayed truncation is effective. Dot sparse
+   convincingly beats scalar sparse kernels at density 3.125% and above for all
+   three seeds, reaching approximately 5.7x. At density 1.042%, scalar is slightly
+   faster for seed 7 and about 6% faster for seed 29; dot is not universally the
+   best sparse choice. Grouping alone never meets the 10% improvement criterion
+   for batch kernels or complete execution across the 18 fixtures.
+2. **Runtime sparsity benefit:** dot sparse has a cross-seed matrix-kernel benefit
+   at 75% or more zeros. **No tested fixture meets the >=10% complete-execution
+   reduction criterion against dense**, for either workload. Some complete-time
+   intervals support smaller improvements. The best dot-versus-dense batch point estimate is
+   seed 7 at 98.96% zeros: speedup 1.098 [1.059, 1.136], an 8.9% time reduction.
+3. **Communication benefit:** dot sparse reduces total batch communication by
+   about 64–65%, 50–54%, and 24–30% at the three highest sparsities. At 75% zeros,
+   savings vary from approximately 0.12% to 5.9%; at 50% and 0% zeros there is no
+   saving. Scalar and grouped communicate equal totals.
+
+### Accuracy-policy audit
+
+The uniform revised floor is 0.002, with relative term 0.0001. Original failures
+remain preserved. Importantly, all 4,608 original/quantized reference checks on
+the primary validation vectors also pass the **original** tolerance, as do all
+2,160 single-trial output checks and all 3,888 aggregate checksum checks. The only
+original-policy failures in the validation audit are the original and quantized
+comparisons for the same cancellation vector in the adversarial fixture. This
+distinguishes the edge-case tolerance issue from the primary performance findings.
+Checksums do not establish per-vector accuracy on every batch trial; independent
+per-vector validation is the preceding gate, as specified in the methodology.
+
+### Scope and reproducibility
+
+All conclusions are limited to uniform synthetic support, 24x12 shape, 8/8/8
+hospital rows, public coordinates and padding, three-party semi-honest replicated
+sharing on localhost, scale 0.25, f=20/k=48/ring=128, and capacity
+`min(96,max(1,m))` per hospital. The protocol, support loading, values, vectors,
+and schedules are matched across the four new variants. The legacy diagnostic
+remains separately labeled. No claim is made for private support, scRNA-seq data,
+larger shapes, or WAN networks. Full padding explains the dense-equivalent plateau
+at higher density; these results do not isolate an unpadded CSR implementation.
+
+Rebuild the combined tables and audit from the preserved execution logs:
+
+```bash
+PYTHONPATH=src /Users/erdos/miniconda3/bin/python3 -m sparse_pca.public_kernel combine --out results/public-kernel-final
+```
+
+The sections below preserve the seed-17 findings and wall-clock investigation.
 
 ## Corrected-clock run: current conclusions
 
